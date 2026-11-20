@@ -1,0 +1,7 @@
+{
+  "name": "cache-display",
+  "displayName": "Cache Display",
+  "version": "0.1.0",
+  "description": "Side pane showing the prompt-cache hit rate of every model request in the current conversation, to help diagnose zero-cache requests.",
+  "logo": "logo.svg"
+}

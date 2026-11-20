@@ -1,0 +1,14 @@
+node_modules/
+npm-debug.log*
+*.log
+
+.env
+.env.*
+
+.DS_Store
+Thumbs.db
+desktop.ini
+
+*.db
+*.db-wal
+*.db-shm

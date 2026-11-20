@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cache Display</title>
+<style>
+  :root {
+    --bg: var(--background, #f7f7f8);
+    --fg: var(--foreground, #1d1f21);
+    --muted: var(--muted-foreground, #5d676f);
+    --line: color-mix(in srgb, var(--fg) 10%, transparent);
+    --fill: color-mix(in srgb, var(--fg) 6%, transparent);
+    --good: #4f9a3b;
+    --mid: #c79a1b;
+    --bad: #d04545;
+    --accent: var(--primary, #007acc);
+    --font: var(--font-family, system-ui, -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif);
+    --mono: var(--editor-font-family, ui-monospace, SFMono-Regular, Consolas, monospace);
+  }
+  :root[data-theme="dark"] { --good: #7aae66; --mid: #d9b44a; --bad: #e86a6a; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--fg); font: 13px/1.45 var(--font); display: flex; flex-direction: column; }
+  header { padding: 10px 12px 8px; border-bottom: 1px solid var(--line); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 8px; }
+  .card { background: var(--fill); border-radius: 6px; padding: 6px 8px; }
+  .card .k { color: var(--muted); font-size: 11px; }
+  .card .v { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .card .s { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .good { color: var(--good); } .mid { color: var(--mid); } .bad { color: var(--bad); }
+  .toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; flex-wrap: wrap; }
+  .toolbar .grow { flex: 1; }
+  button, label.chk { font: inherit; color: var(--fg); background: var(--fill); border: 0; border-radius: 5px; padding: 3px 8px; cursor: pointer; }
+  button:hover { background: color-mix(in srgb, var(--fg) 11%, transparent); }
+  label.chk { display: inline-flex; gap: 4px; align-items: center; }
+  main { flex: 1; overflow: auto; }
+  #chart { padding: 8px 12px 4px; }
+  #chart svg { width: 100%; height: 86px; display: block; }
+  .tablewrap { padding: 0 6px 12px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th { position: sticky; top: 0; background: var(--bg); text-align: right; font-weight: 500; color: var(--muted); font-size: 11px; padding: 5px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  td.flags, th.flags { text-align: left; white-space: normal; }
+  tr.zero td { background: color-mix(in srgb, var(--bad) 9%, transparent); }
+  tr.miss td { background: color-mix(in srgb, var(--mid) 9%, transparent); }
+  .hitcell { display: inline-flex; align-items: center; gap: 6px; justify-content: flex-end; }
+  .bar { width: 44px; height: 6px; border-radius: 3px; background: var(--fill); overflow: hidden; }
+  .bar i { display: block; height: 100%; }
+  .badge { display: inline-block; font-size: 10.5px; padding: 0 5px; border-radius: 8px; margin: 0 3px 2px 0; border: 1px solid currentColor; }
+  .empty { padding: 28px 16px; text-align: center; color: var(--muted); }
+  .dim { color: var(--muted); }
+  #note { padding: 6px 12px 12px; color: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+<header><div class="cards" id="cards"></div></header>
+<div class="toolbar">
+  <span id="conv" class="dim"></span>
+  <span class="grow"></span>
+  <label class="chk"><input type="checkbox" id="onlyBad"><span id="onlyBadLabel"></span></label>
+  <button id="copy"></button>
+</div>
+<main>
+  <div id="chart"></div>
+  <div class="tablewrap" id="table"></div>
+  <div id="note"></div>
+</main>
+<script>
+const zh = /^zh/i.test(navigator.language || '');
+const T = zh ? {
+  overall: '总命中率', last: '最近一次', requests: '请求数', zero: '0 缓存', miss: '前缀未命中',
+  n: '#', time: '时间', gap: '间隔', input: '输入', cached: '命中', uncached: '未命中', hit: '命中率', out: '输出', ttft: '首字', flags: '标记',
+  onlyBad: '仅看异常', copy: '复制 CSV', copied: '已复制', conv: '对话',
+  empty: '这个对话还没有已完成的模型请求。', none: '没有找到对话数据库。', failed: '读取对话数据库失败，稍后重试。', locked: '页面无权访问，请重新打开面板。',
+  f_zero: '0 缓存', f_zero_small: '0 缓存（输入过短）', f_miss: '前缀未读取', f_gap: '间隔过长', f_shrunk: '上下文缩小', f_retry: '有重试',
+  d_zero: '输入已够长，但没有任何 token 命中缓存', d_zero_small: '输入不足 1024 token，可能没达到缓存门槛', d_miss: '上一次请求的完整提示本应可复用，但这次只读取了一部分', d_gap: '距上一次回答结束超过 5 分钟，缓存可能已过期', d_shrunk: '输入比上一次少了 30% 以上，可能发生了压缩或截断', d_retry: '这次请求出现过失败重试',
+  note: '命中率 = 命中缓存的输入 token ÷ 总输入 token。“间隔”是上一次回答结束到本次请求开始的估算时间。数据来自本地对话数据库，只读。',
+  of: '/', model: '模型',
+} : {
+  overall: 'Overall hit', last: 'Last request', requests: 'Requests', zero: 'Zero cache', miss: 'Prefix misses',
+  n: '#', time: 'Time', gap: 'Gap', input: 'Input', cached: 'Cached', uncached: 'Uncached', hit: 'Hit', out: 'Output', ttft: 'TTFT', flags: 'Flags',
+  onlyBad: 'Anomalies only', copy: 'Copy CSV', copied: 'Copied', conv: 'Conversation',
+  empty: 'No completed model requests in this conversation yet.', none: 'No conversation database found.', failed: 'Could not read the conversation database; retrying.', locked: 'Not authorised. Reopen the panel.',
+  f_zero: 'Zero cache', f_zero_small: 'Zero cache (short input)', f_miss: 'Prefix not read', f_gap: 'Long gap', f_shrunk: 'Context shrank', f_retry: 'Retried',
+  d_zero: 'Input is long enough, yet no token was served from cache', d_zero_small: 'Input under 1024 tokens; may be below the caching threshold', d_miss: 'The previous request\'s whole prompt should be reusable, but only part of it was read', d_gap: 'More than 5 minutes since the previous answer finished; cache may have expired', d_shrunk: 'Input is 30%+ smaller than the previous request; compaction or truncation?', d_retry: 'This request had a failed attempt',
+  note: 'Hit = cached input tokens / total input tokens. "Gap" estimates the time from the previous answer finishing to this request starting. Read-only, from local conversation databases.',
+  of: '/', model: 'Model',
+};
+const $ = id => document.getElementById(id);
+const fmt = n => n === null || n === undefined ? '-' : n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e4 ? (n / 1e3).toFixed(1) + 'K' : String(n);
+const pct = h => h === null || h === undefined ? '-' : (h * 100).toFixed(h >= 0.995 || h === 0 ? 0 : 1) + '%';
+const tone = h => h === null ? '' : h >= 0.8 ? 'good' : h >= 0.4 ? 'mid' : 'bad';
+const color = h => `var(--${tone(h) || 'mid'})`;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const clock = ms => ms ? new Date(ms).toLocaleTimeString([], { hour12: false }) : '-';
+const gapText = s => s === null ? '-' : s < 90 ? Math.round(s) + 's' : s < 5400 ? Math.round(s / 60) + 'm' : (s / 3600).toFixed(1) + 'h';
+
+let data = null, version = '', locked = false;
+const state = { onlyBad: false };
+
+function theme() {
+  const bg = getComputedStyle(document.documentElement).getPropertyValue('--background').trim();
+  const m = bg.match(/#([0-9a-f]{6})/i) || [];
+  let dark = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches;
+  if (m[1]) { const n = parseInt(m[1], 16); dark = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) < 128; }
+  else if (/rgb/.test(bg)) { const c = bg.match(/\d+/g).map(Number); dark = (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]) < 128; }
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+}
+
+function card(k, v, cls, s) {
+  return `<div class="card"><div class="k">${k}</div><div class="v ${cls || ''}">${v}</div><div class="s">${s || '&nbsp;'}</div></div>`;
+}
+
+function render() {
+  if (!data) return;
+  if (!data.ok) {
+    $('cards').innerHTML = '';
+    $('chart').innerHTML = '';
+    $('table').innerHTML = `<div class="empty">${data.error === 'no-conversation' ? T.none : T.failed}</div>`;
+    return;
+  }
+  const s = data.summary, rows = data.rows;
+  $('conv').textContent = T.conv + ' ' + data.conversationId.slice(0, 8);
+  $('cards').innerHTML =
+    card(T.overall, pct(s.hit), tone(s.hit), `${fmt(s.cached)} ${T.of} ${fmt(s.input)}`) +
+    card(T.last, pct(s.lastHit), tone(s.lastHit), rows.length ? '#' + rows.at(-1).n : '') +
+    card(T.requests, s.requests, '', '') +
+    card(T.zero, s.zero, s.zero ? 'bad' : '', s.zeroCacheable !== s.zero ? `${s.zeroCacheable} ${T.of} ${s.zero}` : '') +
+    card(T.miss, s.misses, s.misses ? 'mid' : '', '');
+  chart(rows);
+  const shown = (state.onlyBad ? rows.filter(r => r.flags.some(f => f !== 'gap')) : rows).slice().reverse();
+  if (!rows.length) { $('table').innerHTML = `<div class="empty">${T.empty}</div>`; return; }
+  let h = `<table><thead><tr><th>${T.n}</th><th>${T.time}</th><th>${T.gap}</th><th>${T.input}</th><th>${T.cached}</th><th>${T.uncached}</th><th>${T.hit}</th><th>${T.out}</th><th class="flags">${T.flags}</th></tr></thead><tbody>`;
+  for (const r of shown) {
+    const cls = r.flags.includes('zero') ? 'zero' : r.flags.includes('miss') ? 'miss' : '';
+    const badges = r.flags.map(f => {
+      const c = f.startsWith('zero') ? 'bad' : f === 'miss' || f === 'shrunk' || f === 'retry' ? 'mid' : 'dim';
+      const key = f.replace('-', '_');
+      return `<span class="badge ${c}" title="${esc(T['d_' + key] || '')}">${T['f_' + key]}</span>`;
+    }).join('');
+    const tip = [r.model && `${T.model}: ${r.model}`, `${T.ttft}: ${r.ttft === null ? '-' : r.ttft.toFixed(2) + 's'}`, `${T.out}: ${r.output}`].filter(Boolean).join(' · ');
+    h += `<tr class="${cls}" title="${esc(tip)}"><td>${r.n}</td><td>${clock(r.startMs)}</td><td class="${r.flags.includes('gap') ? 'mid' : 'dim'}">${gapText(r.gapSec)}</td>` +
+      `<td>${fmt(r.input)}</td><td>${fmt(r.cached)}</td><td>${fmt(r.uncached)}</td>` +
+      `<td><span class="hitcell"><span class="bar"><i style="width:${Math.round((r.hit || 0) * 100)}%;background:${color(r.hit)}"></i></span><b class="${tone(r.hit)}">${pct(r.hit)}</b></span></td>` +
+      `<td>${fmt(r.output)}</td><td class="flags">${badges}</td></tr>`;
+  }
+  $('table').innerHTML = h + '</tbody></table>';
+  $('note').textContent = T.note;
+}
+
+function chart(rows) {
+  if (!rows.length) { $('chart').innerHTML = ''; return; }
+  const view = rows.slice(-80), w = 400, ht = 80, bw = w / view.length;
+  let bars = '';
+  view.forEach((r, i) => {
+    const hh = Math.max(1.5, (r.hit || 0) * (ht - 4));
+    const x = i * bw;
+    const fill = r.flags.includes('zero') ? 'var(--bad)' : color(r.hit);
+    bars += `<rect x="${(x + bw * 0.12).toFixed(2)}" y="${(ht - hh).toFixed(2)}" width="${(bw * 0.76).toFixed(2)}" height="${hh.toFixed(2)}" rx="1" fill="${fill}" opacity="${r.flags.includes('zero') ? 1 : 0.85}"><title>#${r.n}  ${pct(r.hit)}  ${fmt(r.cached)} / ${fmt(r.input)}</title></rect>`;
+  });
+  const guide = [0.8, 0.4].map(g => `<line x1="0" x2="${w}" y1="${(ht - g * (ht - 4)).toFixed(1)}" y2="${(ht - g * (ht - 4)).toFixed(1)}" stroke="currentColor" opacity=".12" stroke-dasharray="3 3"/>`).join('');
+  $('chart').innerHTML = `<svg viewBox="0 0 ${w} ${ht}" preserveAspectRatio="none" style="color:var(--fg)">${guide}${bars}</svg>`;
+}
+
+async function post(path, body) {
+  const params = new URLSearchParams(location.search);
+  const token = params.get('token') || window.sidecar?.token || '';
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['X-Sidecar-Token'] = token;
+  const res = await (window.sidecar?.fetch || fetch)(path, { method: 'POST', redirect: 'error', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(8000) });
+  if (res.status === 401 || res.status === 403) { locked = true; throw new Error('auth'); }
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.json();
+}
+
+let busy = false;
+async function refresh() {
+  if (busy || locked) return;
+  busy = true;
+  try {
+    const conversationId = window.sidecar?.conversationId || new URLSearchParams(location.search).get('conversationId') || '';
+    const res = await post('/api/cache', { conversationId, version });
+    if (res.unchanged) return;
+    data = res;
+    version = res.ok ? res.version : '';
+    render();
+  } catch {
+    if (locked) { $('cards').innerHTML = ''; $('table').innerHTML = `<div class="empty">${T.locked}</div>`; }
+    else if (!data) { $('table').innerHTML = `<div class="empty">${T.failed}</div>`; }
+  } finally { busy = false; }
+}
+
+function csv() {
+  const head = 'n,idx,time,gap_s,input,cached,uncached,hit_pct,output,ttft_s,flags';
+  const lines = (data?.rows || []).map(r => [r.n, r.idx, r.startMs ? new Date(r.startMs).toISOString() : '', r.gapSec === null ? '' : r.gapSec.toFixed(1), r.input, r.cached, r.uncached, r.hit === null ? '' : (r.hit * 100).toFixed(1), r.output, r.ttft === null ? '' : r.ttft.toFixed(2), r.flags.join('|')].join(','));
+  return [head, ...lines].join('\n');
+}
+async function copyCsv() {
+  const text = csv();
+  try { await navigator.clipboard.writeText(text); }
+  catch { const t = document.createElement('textarea'); t.value = text; document.body.append(t); t.select(); try { document.execCommand('copy'); } catch {} t.remove(); }
+  $('copy').textContent = T.copied;
+  setTimeout(() => { $('copy').textContent = T.copy; }, 1200);
+}
+
+$('onlyBadLabel').textContent = T.onlyBad;
+$('copy').textContent = T.copy;
+$('onlyBad').addEventListener('change', e => { state.onlyBad = e.target.checked; render(); });
+$('copy').addEventListener('click', copyCsv);
+theme();
+new MutationObserver(theme).observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class'] });
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

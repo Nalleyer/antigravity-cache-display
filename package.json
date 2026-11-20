@@ -1,0 +1,11 @@
+{
+  "name": "antigravity-cache-display",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/parser.test.mjs",
+    "inspect": "node tools/inspect.mjs",
+    "dev": "node tools/dev-server.mjs"
+  }
+}

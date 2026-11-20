@@ -1,0 +1,18 @@
+{
+  "command": "node",
+  "args": ["server.mjs"],
+  "restart_policy": "always",
+  "display_name": "Cache Display",
+  "description": "Per-request prompt-cache hit rate for the current conversation, read from local conversation databases.",
+  "has_web_ui": true,
+  "ui_config": {
+    "display_name": "Cache Display",
+    "views": [
+      {
+        "path": "/",
+        "entrypoint": "SIDECAR_UI_ENTRYPOINT_AUX_PANE",
+        "title": "Cache"
+      }
+    ]
+  }
+}
